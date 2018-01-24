@@ -1,0 +1,57 @@
+syntax = "proto2";
+
+import "types.proto";
+
+message NetProgress {
+  optional uint64 total = 1;
+  optional uint64 delta = 2;
+}
+
+message Handshake {
+  optional string auth_key = 1;
+}
+
+message ServiceBindList {
+  repeated ServiceBind binds = 1;
+}
+
+message SvcGetDefaultCfg {
+  optional PackageIdent ident = 1;
+}
+
+message SvcLoad {
+  optional PackageIdent ident = 1;
+  optional ApplicationEnvironment application_environment = 2;
+  repeated ServiceBind binds = 3;
+  map<string, ServiceBindList> composite_binds = 4;
+  optional bool specified_binds = 5;
+  optional string bldr_url = 6;
+  optional string bldr_channel = 7;
+  optional string config_from = 8;
+  optional bool force = 9 [default = false];
+  optional string group = 10;
+  optional string svc_encrypted_password = 11;
+  optional Topology topology = 12;
+  optional UpdateStrategy update_strategy = 13;
+}
+
+message SvcUnload {
+  optional PackageIdent ident = 1;
+}
+
+message SvcStart {
+  optional PackageIdent ident = 1; 
+}
+
+message SvcStop {
+  optional PackageIdent ident = 1;
+}
+
+message SvcStatus {
+  optional PackageIdent ident = 1;
+}
+
+message ConsoleLine {
+  optional string line = 2;
+}
+

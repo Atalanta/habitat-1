@@ -200,7 +200,7 @@ So with our application freshly built, let's see if we can actually run it. As I
 
 ```studio
 [3][default:/src:0]# hab sup status
-mwrock/np-mongodb/3.2.9/20171013092907 (standalone), state:up, time:PT238.002019600S, pid:539, group:np-mongodb.default, style:transient
+mwrock/np-mongodb/3.2.9/20171013092907 (standalone), state:up, time:PT238.002019600S, pid:539, group:np-mongodb.default
 [4][default:/src:0]#
 ```
 

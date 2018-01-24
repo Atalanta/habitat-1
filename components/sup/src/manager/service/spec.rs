@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs::{self, File};
 use std::io::{BufReader, Read, Write};
@@ -23,6 +23,7 @@ use std::str::FromStr;
 
 use hcore::channel::STABLE_CHANNEL;
 use hcore::package::{PackageIdent, PackageInstall};
+use hcore::package::metadata::BindMapping;
 use hcore::service::{ApplicationEnvironment, ServiceGroup};
 use hcore::url::DEFAULT_BLDR_URL;
 use hcore::util::{deserialize_using_from_str, serialize_using_to_string};
@@ -31,11 +32,14 @@ use serde::{self, Deserialize};
 use toml;
 
 use super::{Topology, UpdateStrategy};
+use super::composite_spec::CompositeSpec;
 use error::{Error, Result, SupError};
 
 static LOGKEY: &'static str = "SS";
 static DEFAULT_GROUP: &'static str = "default";
 const SPEC_FILE_EXT: &'static str = "spec";
+
+pub type BindMap = HashMap<PackageIdent, Vec<BindMapping>>;
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum DesiredState {
@@ -71,6 +75,26 @@ impl FromStr for DesiredState {
     }
 }
 
+/// Helper enum to abstract over spec type.
+///
+/// Currently needed only here. Don't bother moving anywhere because
+/// ServiceSpecs AND CompositeSpecs will be going away soon anyway.
+pub enum Spec {
+    Service(ServiceSpec),
+    Composite(CompositeSpec, Vec<ServiceSpec>),
+}
+
+impl Spec {
+    /// We need to get at the identifier of a spec, regardless of
+    /// which kind it is.
+    pub fn ident(&self) -> &PackageIdent {
+        match self {
+            &Spec::Composite(ref s, _) => s.ident(),
+            &Spec::Service(ref s) => s.ident.as_ref(),
+        }
+    }
+}
+
 pub fn deserialize_application_environment<'de, D>(
     d: D,
 ) -> result::Result<Option<ApplicationEnvironment>, D::Error>
@@ -85,6 +109,22 @@ where
     } else {
         Ok(None)
     }
+}
+
+pub trait IntoServiceSpec {
+    fn into_spec(&self, spec: &mut ServiceSpec);
+
+    /// All specs in a composite currently share a lot of the same
+    /// information. Here, we create a "base spec" that we can clone and
+    /// further customize for each individual service as needed.
+    fn into_composite_spec(
+        &self,
+        composite_name: String,
+        services: Vec<PackageIdent>,
+        bind_map: BindMap,
+    ) -> Vec<ServiceSpec>;
+
+    fn update_composite(&self, bind_map: &mut BindMap, spec: &mut ServiceSpec);
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -106,9 +146,6 @@ pub struct ServiceSpec {
     #[serde(deserialize_with = "deserialize_using_from_str",
             serialize_with = "serialize_using_to_string")]
     pub desired_state: DesiredState,
-    #[serde(deserialize_with = "deserialize_using_from_str",
-            serialize_with = "serialize_using_to_string")]
-    pub start_style: StartStyle,
     pub svc_encrypted_password: Option<String>,
     // The name of the composite this service is a part of
     pub composite: Option<String>,
@@ -241,7 +278,6 @@ impl Default for ServiceSpec {
             binds: Vec::default(),
             config_from: None,
             desired_state: DesiredState::default(),
-            start_style: StartStyle::default(),
             svc_encrypted_password: None,
             composite: None,
         }
@@ -308,40 +344,6 @@ impl serde::Serialize for ServiceBind {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-pub enum StartStyle {
-    Persistent,
-    Transient,
-}
-
-impl Default for StartStyle {
-    fn default() -> StartStyle {
-        StartStyle::Transient
-    }
-}
-
-impl fmt::Display for StartStyle {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let value = match *self {
-            StartStyle::Persistent => "persistent",
-            StartStyle::Transient => "transient",
-        };
-        write!(f, "{}", value)
-    }
-}
-
-impl FromStr for StartStyle {
-    type Err = SupError;
-
-    fn from_str(value: &str) -> result::Result<Self, Self::Err> {
-        match value.to_lowercase().as_ref() {
-            "persistent" => Ok(StartStyle::Persistent),
-            "transient" => Ok(StartStyle::Transient),
-            _ => Err(sup_error!(Error::BadStartStyle(value.to_string()))),
-        }
-    }
-}
-
 #[cfg(test)]
 mod test {
     use std::fs::{self, File};
@@ -388,7 +390,6 @@ mod test {
             topology = "leader"
             update_strategy = "rolling"
             binds = ["cache:redis.cache@acmecorp", "db:postgres.app@acmecorp"]
-            start_style = "persistent"
             config_from = "/only/for/development"
 
             extra_stuff = "should be ignored"
@@ -420,7 +421,6 @@ mod test {
             spec.config_from,
             Some(PathBuf::from("/only/for/development"))
         );
-        assert_eq!(spec.start_style, StartStyle::Persistent);
     }
 
     #[test]
@@ -494,7 +494,6 @@ mod test {
             ],
             config_from: Some(PathBuf::from("/only/for/development")),
             desired_state: DesiredState::Down,
-            start_style: StartStyle::Persistent,
             svc_encrypted_password: None,
             composite: None,
         };
@@ -514,7 +513,6 @@ mod test {
         assert!(toml.contains(r#""cache:redis.cache@acmecorp""#));
         assert!(toml.contains(r#""db:postgres.app@acmecorp""#));
         assert!(toml.contains(r#"desired_state = "down""#));
-        assert!(toml.contains(r#"start_style = "persistent""#));
         assert!(toml.contains(r#"config_from = "/only/for/development""#));
     }
 
@@ -653,7 +651,6 @@ mod test {
             ],
             config_from: Some(PathBuf::from("/only/for/development")),
             desired_state: DesiredState::Down,
-            start_style: StartStyle::Persistent,
             svc_encrypted_password: None,
             composite: None,
         };
@@ -674,7 +671,6 @@ mod test {
         assert!(toml.contains(r#""cache:redis.cache@acmecorp""#));
         assert!(toml.contains(r#""db:postgres.app@acmecorp""#));
         assert!(toml.contains(r#"desired_state = "down""#));
-        assert!(toml.contains(r#"start_style = "persistent""#));
         assert!(toml.contains(r#"config_from = "/only/for/development""#));
     }
 

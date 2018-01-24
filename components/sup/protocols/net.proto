@@ -1,0 +1,17 @@
+syntax = "proto2";
+
+enum ErrCode {
+  Internal = 0;
+  Io = 1;
+  NotFound = 2;
+  Conflict = 3;
+  Unauthorized = 4;
+}
+
+message NetOk {}
+
+message NetErr {
+  optional ErrCode code = 1;
+  optional string msg = 2;
+}
+
